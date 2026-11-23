@@ -1,0 +1,106 @@
+name: Build Kandinsky S2V 1.0 image
+
+# Builds the CUDA 13.0 Kandinsky S2V image on a GitHub-hosted runner (Docker + network) and
+# pushes it to GHCR, where vast.ai pulls it. Same recipe as the LTX-2.5 image (ltx25-docker).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to push"
+        required: true
+        default: "cu130"
+      ks2v_ref:
+        description: "kandinskylab/kandinsky-s2v git ref (commit) to build"
+        required: true
+        default: "6d319f0ca20d69bfaf750d98d8d600ee4d39e8ca"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "scripts/**"
+      - ".github/workflows/build-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/josephatwoosh/kandinsky-s2v10
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner has ~22 GB free; the CUDA devel stage plus two torch stacks need much more.
+      - name: Free disk space
+        run: |
+          set -eux
+          df -h /
+          sudo rm -rf /usr/lib/jvm /usr/local/.ghcup /usr/local/lib/android /usr/local/share/powershell \
+                      /usr/share/dotnet /usr/share/swift "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}" \
+                      /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Single platform, no attestations: the tag is a plain manifest, not an OCI index
+      # (an index once left the LTX tag unpullable with MANIFEST_UNKNOWN).
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            KS2V_REF=${{ github.event.inputs.ks2v_ref || '6d319f0ca20d69bfaf750d98d8d600ee4d39e8ca' }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.IMAGE }}:${{ github.event.inputs.tag || 'cu130' }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+      # Only a real pull proves a vast.ai host can pull it.
+      - name: Verify the pushed image pulls back
+        run: |
+          set -eux
+          TAG="${{ github.event.inputs.tag || 'cu130' }}"
+          docker pull "${IMAGE}:${TAG}"
+          DIGESTS=$(docker image inspect "${IMAGE}:${TAG}" --format '{{range .RepoDigests}}{{println .}}{{end}}')
+          echo "${DIGESTS}"
+          { echo "### Verified: the pushed image pulls"; echo; echo '```'; echo "${DIGESTS}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # No GPU on the runner: prove the stacks import and every CLI constructs.
+      - name: Smoke test
+        run: |
+          set -eux
+          TAG="${{ github.event.inputs.tag || 'cu130' }}"
+          docker run --rm "${IMAGE}:${TAG}" python -c "import sys, torch, diffusers, transformers, librosa, kandinsky_s2v; from kandinsky_s2v.pipeline.factory import get_s2v_pipeline; from kandinsky_s2v.pipeline.config import load_config; load_config('/opt/ks2v/src/kandinsky_s2v/configs/s2v_pro_distill.yaml'); print('python', sys.version.split()[0], '| torch', torch.__version__, '| cuda build', torch.version.cuda); print('ok')"
+          docker run --rm "${IMAGE}:${TAG}" kandy-s2v generate --help > /dev/null
+          docker run --rm "${IMAGE}:${TAG}" ks2v-run --help
+          docker run --rm --entrypoint /opt/vs2/venv/bin/python "${IMAGE}:${TAG}" \
+            -c "import torch, transformers, qwen_vl_utils; print('vs2 ok', torch.__version__, transformers.__version__)"
+          docker run --rm "${IMAGE}:${TAG}" bash -c 'command -v cc && command -v ffmpeg'
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image pushed"; echo; echo '```'
+            echo "${IMAGE}:${{ github.event.inputs.tag || 'cu130' }}"
+            echo '```'; echo
+            echo "Make the GHCR package public (Package settings -> Change visibility) so vast.ai can pull it."
+          } >> "$GITHUB_STEP_SUMMARY"
