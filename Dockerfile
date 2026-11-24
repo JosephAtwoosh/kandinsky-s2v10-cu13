@@ -66,7 +66,7 @@ RUN git init -q . \
 # without the dev group. huggingface_hub[hf] adds the `hf` CLI for fetching weights.
 RUN uv python install 3.13 \
     && uv sync --frozen --no-dev --python 3.13 \
-    && uv pip install --python /opt/ks2v/.venv/bin/python "huggingface_hub[hf_xet]" \
+    && uv pip install --python /opt/ks2v/.venv/bin/python "huggingface_hub[hf_xet]" opencv-python-headless \
     && /opt/ks2v/.venv/bin/python - <<'PY'
 import sys, torch, diffusers, transformers
 print(f"python {sys.version.split()[0]} | torch {torch.__version__} (CUDA build {torch.version.cuda})"
@@ -124,6 +124,14 @@ COPY --chmod=0755 scripts/doctor.sh /usr/local/bin/ks2v-doctor
 COPY --chmod=0755 scripts/run-s2v.sh /usr/local/bin/ks2v-run
 COPY --chmod=0755 scripts/download-models.sh /usr/local/bin/ks2v-download
 COPY --chmod=0755 scripts/vs2_score.py /usr/local/bin/ks2v-vs2-score
+# Speaker-only lip-sync: crop around the speaker, render, composite back (see scripts/crop_run.py).
+COPY --chmod=0755 scripts/crop_run.py /usr/local/bin/ks2v-crop-run
+# Queue tools for a rented machine: one queue per GPU, and the chained-shot fix-up pass.
+COPY --chmod=0755 scripts/run-queue.sh /usr/local/bin/ks2v-queue
+COPY --chmod=0755 scripts/chain-fixup.sh /usr/local/bin/ks2v-chain-fixup
+# The no-GPU test imports scripts/crop_run.py relative to itself, so keep the repo layout.
+COPY --chmod=0644 tests/test_crop_run.py /opt/ks2v-tests/tests/test_crop_run.py
+COPY --chmod=0644 scripts/crop_run.py /opt/ks2v-tests/scripts/crop_run.py
 
 RUN mkdir -p /models /output /workspace
 VOLUME ["/models", "/output"]

@@ -36,13 +36,22 @@ done
 CONFIG="/opt/ks2v/src/kandinsky_s2v/configs/s2v_${MODEL}${VARIANT}${HD}.yaml"
 [ -f "$CONFIG" ] || { echo "no config $CONFIG" >&2; exit 2; }
 
-# VAE tiling is a config-only switch, so write a patched copy next to the output.
-if [ "${VAE_TILING:-0}" = "1" ]; then
+# VAE tiling and the size are config-only switches, so write a patched copy next to the output.
+# RESOLUTION=HxW (e.g. 512x896, our LTX frame) replaces the size buckets; both must divide by 16.
+# OFFLOAD=module keeps only the stage in use on the GPU (needed for Lite on 24 GB cards).
+if [ "${VAE_TILING:-0}" = "1" ] || [ -n "${RESOLUTION:-}" ] || [ -n "${OFFLOAD:-}" ]; then
   PATCHED="$(dirname "$OUT")/.$(basename "$OUT" .mp4).config.yaml"
-  python - "$CONFIG" "$PATCHED" <<'PY'
+  python - "$CONFIG" "$PATCHED" "${VAE_TILING:-0}" "${RESOLUTION:-}" "${OFFLOAD:-}" <<'PY'
 import sys, yaml
 c = yaml.safe_load(open(sys.argv[1]))
-c.setdefault("offload", {})["vae_tiling"] = True
+if sys.argv[3] == "1":
+    c.setdefault("offload", {})["vae_tiling"] = True
+if sys.argv[5]:
+    c.setdefault("offload", {})["strategy"] = sys.argv[5]
+if sys.argv[4]:
+    h, w = (int(v) for v in sys.argv[4].lower().split("x"))
+    assert h % 16 == 0 and w % 16 == 0, "RESOLUTION sides must divide by 16"
+    c["generation"]["allowed_resolutions"] = [[h, w]]
 yaml.safe_dump(c, open(sys.argv[2], "w"), sort_keys=False)
 PY
   CONFIG="$PATCHED"
@@ -69,6 +78,6 @@ echo "WALL_SECONDS=$((T1-T0))" | tee -a "$BASE.log"
 [ "$RC" -eq 0 ] || exit "$RC"
 
 if [ -n "$FPS" ]; then
-  ffmpeg -v error -y -i "$OUT" -vf "fps=${FPS}" -c:v libx264 -crf 16 -pix_fmt yuv420p -c:a copy "$BASE.${FPS}fps.mp4"
+  ffmpeg -nostdin -v error -y -i "$OUT" -vf "fps=${FPS}" -c:v libx264 -crf 16 -pix_fmt yuv420p -c:a copy "$BASE.${FPS}fps.mp4"
   echo "wrote $BASE.${FPS}fps.mp4"
 fi

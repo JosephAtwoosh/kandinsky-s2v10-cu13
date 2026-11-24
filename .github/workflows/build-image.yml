@@ -92,6 +92,9 @@ jobs:
           docker run --rm "${IMAGE}:${TAG}" python -c "import sys, torch, diffusers, transformers, librosa, kandinsky_s2v; from kandinsky_s2v.pipeline.factory import get_s2v_pipeline; from kandinsky_s2v.pipeline.config import load_config; load_config('/opt/ks2v/src/kandinsky_s2v/configs/s2v_pro_distill.yaml'); print('python', sys.version.split()[0], '| torch', torch.__version__, '| cuda build', torch.version.cuda); print('ok')"
           docker run --rm "${IMAGE}:${TAG}" kandy-s2v generate --help > /dev/null
           docker run --rm "${IMAGE}:${TAG}" ks2v-run --help
+          # The crop-and-composite wrapper, end to end without a GPU (fake render, real ffmpeg/OpenCV).
+          docker run --rm "${IMAGE}:${TAG}" ks2v-crop-run --help > /dev/null
+          docker run --rm "${IMAGE}:${TAG}" python /opt/ks2v-tests/tests/test_crop_run.py
           docker run --rm --entrypoint /opt/vs2/venv/bin/python "${IMAGE}:${TAG}" \
             -c "import torch, transformers, qwen_vl_utils; print('vs2 ok', torch.__version__, transformers.__version__)"
           docker run --rm "${IMAGE}:${TAG}" bash -c 'command -v cc && command -v ffmpeg'
